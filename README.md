@@ -89,5 +89,21 @@ flowchart LR
     LOC --> RT
     MAP --> RT
     SPF --> RT
+```
+
+---
+
+## Glossary
+
+|Service | Objective | Responsibility |
+|------|---------|------------------|
+| API Gateway | 1, 2, 3 | Single entry point; authentication, authorization, rate limiting, request routing. |
+| Location Reporting Service | 1 | Validates and stores waste reports (coordinates, amount bucket, waste type, reporter, timestamp, photos). |
+| Geo Store (PostGIS) | 1, 2 | Spatial persistence and querying: bounding‑box queries, nearest‑neighbour, viewport filtering. |
+| Map Service | 2 | Serves viewport‑scoped GeoJSON / map tiles and applies the palette and road‑condition styling. |
+| Palette & Style Config | 2 | Single source of truth for the color palette; versioned so map styling is reproducible. |
+| SPF Request Service | 3 | Creates SPF requests for specific waste locations, manages the request lifecycle, records assignment/completion. |
+| Real‑Time Channel | 3 | Pushes map diffs and request status changes to subscribed clients (WebSocket / SSE). |
+| Notification Worker | 3 | Delivers SPF dispatches and status changes via email/SMS/push (async, decoupled). |
     RT <-->|live updates| C2
     RT <-->|live updates| C1
