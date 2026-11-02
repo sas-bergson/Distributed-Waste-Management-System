@@ -65,7 +65,7 @@ Branch names are not cosmetic. In a shared repository, the branch name is how yo
 **Examples**
 
 ```bash
-feat/obj2/mansa musa /road-condition-layer
-fix/obj1/lindsay abott/ offline-sync-duplicate-reports
-adr/obj3/realtime-backplane-choice
+feat/obj2/mansa_musa/road-condition-layer
+fix/obj1/lindsay_abott/ offline-sync-duplicate-reports
+adr/obj3/john_doe/realtime-backplane-choice
 
