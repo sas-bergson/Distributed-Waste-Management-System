@@ -13,10 +13,10 @@
 - [Project Objectives](#project-objectives)
 - [Glossary](#glossary)
 - [Architecture Overview](#architecture-overview)
-- [Map & Color Palette Specification](#map--color-palette-specification)
+- [Map & Color Palette Specification](#map-color-palette-specification)
 - [Key Features](#key-features)
 - [Technology Stack](#technology-stack)
-- [Repository Structure](#repository-structure)
+- [Repository Structure](#-repository-structure)
 - [Getting Started](#getting-started)
 - [Usage & Scenarios](#usage--scenarios)
 - [How to Contribute (Students & Forks)](#how-to-contribute-students--forks)
@@ -89,11 +89,11 @@ flowchart LR
     LOC --> RT
     MAP --> RT
     SPF --> RT
+    RT <-->|live updates| C2
+    RT <-->|live updates| C1
 ```
 
 ---
-
-## Glossary
 
 |Service | Objective | Responsibility |
 |------|---------|------------------|
@@ -105,5 +105,126 @@ flowchart LR
 | SPF Request Service | 3 | Creates SPF requests for specific waste locations, manages the request lifecycle, records assignment/completion. |
 | Real‑Time Channel | 3 | Pushes map diffs and request status changes to subscribed clients (WebSocket / SSE). |
 | Notification Worker | 3 | Delivers SPF dispatches and status changes via email/SMS/push (async, decoupled). |
-    RT <-->|live updates| C2
-    RT <-->|live updates| C1
+
+---
+
+## Map-color-palette-specification
+
+Objective 2 requires a specific, documented palette. It encodes two independent dimensions on one map, so the team must avoid colour confusion between them. The approach: waste amount is encoded by marker fill colour; road condition is encoded by the road segment's line style and colour. This keeps the two encodings on different visual channels (fill vs. stroke/pattern), which is more readable and more accessible than mixing them in one colour ramp.
+
+### Dimension A — Waste amount (marker fill)
+
+| Bucket | Range (estimated) | Colour | Hex |
+|---------|---------|---------|---------|
+| Empty / clear | 0–10 % | Green | #2E7D32 |
+| Low | 11–40 % | Light amber | #F9A825 |
+| Moderate | 41–70 % | Orange | #EF6C00 |
+| High | 71–90 % | Red | #C62828 |
+| Overflow | > 90 % or flagged | Deep purple | #6A1B9A |
+| Unknown / stale | No report > 7 days | Grey, 50 % opacity | #9E9E9E |
+
+### Dimension B — Road condition (serving road segment)
+
+| Condition | Line style | Colour | Hex |
+|---------|---------|---------|---------|
+| Good / paved| Solid, 3 px | Dark green | #1B5E20 |
+| Degraded | Dashed, 3 px | Dark amber | #F57F17 |
+| Unpaved / dirt track | Dotted, 3 px | Brown | #6D4C41 |
+| Impassable / blocked | Cross‑hatch overlay | Dark red | #B71C1C |
+
+### Rules and constraints
+
+---
+
++ Legend is mandatory on every map view; both dimensions must be legible without hovering.
++ Redundant encoding for accessibility: amount buckets also differ by marker size and shape glyph; road conditions also differ by pattern, so the map remains readable for colour‑vision‑deficient users and in greyscale print.
++ Palette is versioned in *services/map/style/palette.json*; changes require an ADR in *docs/architecture/adr/*.
++ Staleness matters: a report older than the configured TTL renders greyed out, because a colour implying "overflow" must not be trusted indefinitely.
++ Clipping: viewport queries must be spatially indexed so palette rendering cost stays flat as the number of waste locations grows.
+
+---
+
+## Key features
+
+### Objective 1 — Collection
+
++ Multi‑source reporting: field‑agent mobile form, citizen web form, and IoT/smart‑bin telemetry.
++ GPS capture plus manual pin‑drop fallback for low‑accuracy devices.
++ Offline‑first reporting for field agents with deferred sync.
++ Waste attributes: estimated amount bucket, waste type, photo evidence, reporter identity, timestamp.
+
+### Objective 2 — Mapping
+
++ Interactive map with viewport‑scoped GeoJSON loading.
++ Documented, versioned palette encoding waste amount and road condition simultaneously.
++ Filtering by amount bucket, road condition, waste type, freshness, and request status.
++ Clustering at low zoom to keep the map responsive in dense areas.
+
+### Objective 3 — Cloud service & real‑time
+
++ Authenticated REST API to view the map, create/update waste and road reports, and request the SPF for a specific waste location.
++ Real‑time propagation: new reports, edits, and SPF status changes appear on connected clients without refresh (WebSocket/SSE).
++ Full SPF request lifecycle with audit trail: *REQUESTED → ASSIGNED → IN_PROGRESS → COLLECTED, plus REJECTED / CANCELLED*.
++ Multi‑tenant separation (municipality / district) so each authority sees only its jurisdiction.
+
+This section is the specification. The implementation and any refinements belong in *docs/architecture/adr/* and *services/map/style/*.
+
+---
+
+## Technology Stack
+
+| Layer | Suggested Technologies (students may propose alternatives) |
+|---------|------------------------------------------|
+| API Gateway | Node.js (Express/Fastify) or Go |
+| Microservices| Python (FastAPI) or Node.js |
+| Spatial storage | PostgreSQL + PostGIS |
+| Map rendering | MapLibre GL JS / Leaflet + vector or GeoJSON layers |
+| Real‑time	WebSocket | (Socket.IO / ws) or Server‑Sent Events |
+| Messaging (async)	| Redis Pub/Sub or Apache Kafka |
+| IoT ingestion	| MQTT broker (Mosquitto) |
+| Containerisation | Docker · Docker Compose |
+| Orchestration	| Kubernetes (for the scale milestone) |
+| Frontend | React + MapLibre GL JS |
+| Cloud target | AWS / Azure / GCP, or local Docker for development |
+
+PostGIS is strongly recommended over a generic document store: viewport queries, nearest‑waste‑to‑vehicle, and road‑segment joins are exactly what it is built for.
+
+---
+
+## 📁 Repository Structure
+
+```text
+
+distributed-waste-management/
+├── README.md
+├── LICENSE
+├── CONTRIBUTING.md
+├── docker-compose.yml
+├── .github/
+│   └── PULL_REQUEST_TEMPLATE.md      # includes "Objective(s): 1 / 2 / 3"
+├── docs/
+│   ├── architecture/
+│   │   └── adr/                      # palette changes, storage choices, etc.
+│   ├── api/                          # OpenAPI specs per service
+│   └── runbooks/
+├── services/
+│   ├── gateway/                      # API gateway
+│   ├── locations/                    # Objective 1 — reporting & ingestion
+│   ├── map/                          # Objective 2 — GeoJSON/tiles + styling
+│   │   └── style/
+│   │       └── palette.json          # versioned palette (single source of truth)
+│   ├── requests/                     # Objective 3 — SPF request lifecycle
+│   ├── realtime/                     # Objective 3 — WebSocket/SSE hub
+│   └── notifications/                # dispatch & status notifications
+├── simulator/
+│   ├── iot_bins/                     # bin telemetry simulator
+│   └── field_reports/                # scripted waste-location generator
+├── frontend/
+│   ├── dashboard/                    # operations map + SPF queue
+│   └── reporter/                     # citizen / field-agent reporting app
+├── infrastructure/
+│   ├── k8s/
+│   └── terraform/
+└── tests/
+    ├── integration/
+    └── e2e/
