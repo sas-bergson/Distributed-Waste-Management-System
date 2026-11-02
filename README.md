@@ -10,15 +10,15 @@
 
 ## Table of Contents
 
-- [Project Objectives](#project-objectives)
-- [Glossary](#glossary)
-- [Architecture Overview](#architecture-overview)
-- [Map & Color Palette Specification](#map-color-palette-specification)
-- [Key Features](#key-features)
-- [Technology Stack](#technology-stack)
+- [Project Objectives](#-project-objectives)
+- [Glossary](#-glossary)
+- [Architecture Overview](#--architecture-overview)
+- [Map & Color Palette Specification](#-map--color-palette-specification)
+- [Key Features](#-key-features)
+- [Technology Stack](#️-technology-stack)
 - [Repository Structure](#-repository-structure)
-- [Getting Started](#getting-started)
-- [Usage & Scenarios](#usage--scenarios)
+- [Getting Started](#-getting-started)
+- [Usage & Scenarios](#-usage--scenarios)
 - [How to Contribute (Students & Forks)](#how-to-contribute-students--forks)
 - [Roadmap & Milestones](#roadmap--milestones)
 - [Scaling Limits & Where This Breaks](#scaling-limits--where-this-breaks)
@@ -27,7 +27,7 @@
 
 ---
 
-## Project Objectives
+## 🎯 Project Objectives
 
 This capstone is defined by three objectives. Every service, endpoint, and map style must trace back to at least one of them.
 
@@ -41,7 +41,7 @@ This capstone is defined by three objectives. Every service, endpoint, and map s
 
 ---
 
-## Glossary
+## 📖 Glossary
 
 | Term | Meaning |
 |------|---------|
@@ -53,7 +53,7 @@ This capstone is defined by three objectives. Every service, endpoint, and map s
 
 ---
 
-## Architecture Overview
+## 🏛️ Architecture Overview
 
 DWMS is a **cloud‑hosted microservice platform** with an optional edge tier for sensor capture. Services are independently deployable so ingestion volume, map rendering load, and request‑tracking traffic can scale separately.
 
@@ -108,7 +108,7 @@ flowchart LR
 
 ---
 
-## Map-color-palette-specification
+## 🎨 Map & Color Palette Specification
 
 Objective 2 requires a specific, documented palette. It encodes two independent dimensions on one map, so the team must avoid colour confusion between them. The approach: waste amount is encoded by marker fill colour; road condition is encoded by the road segment's line style and colour. This keeps the two encodings on different visual channels (fill vs. stroke/pattern), which is more readable and more accessible than mixing them in one colour ramp.
 
@@ -132,7 +132,7 @@ Objective 2 requires a specific, documented palette. It encodes two independent 
 | Unpaved / dirt track | Dotted, 3 px | Brown | #6D4C41 |
 | Impassable / blocked | Cross‑hatch overlay | Dark red | #B71C1C |
 
-### Rules and constraints
+### ⚖️ Rules and constraints
 
 ---
 
@@ -144,7 +144,7 @@ Objective 2 requires a specific, documented palette. It encodes two independent 
 
 ---
 
-## Key features
+## ✨ Key features
 
 ### Objective 1 — Collection
 
@@ -171,7 +171,7 @@ This section is the specification. The implementation and any refinements belong
 
 ---
 
-## Technology Stack
+## 🛠️ Technology Stack
 
 | Layer | Suggested Technologies (students may propose alternatives) |
 |---------|------------------------------------------|
@@ -228,3 +228,51 @@ distributed-waste-management/
 └── tests/
     ├── integration/
     └── e2e/
+```
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
++ Docker and Docker Compose
+
++ Node.js 20+
+
++ Python 3.10+
+
++ (Optional) Kubernetes for the scale milestone
+
+### 1. Clone and launch
+
+```bash
+git clone https://github.com/<your-org>/distributed-waste-management.git
+cd distributed-waste-management
+docker compose up --build
+```
+This starts the gateway, PostGIS, the location, map, request, and real‑time services, plus a seeded set of waste locations and road segments.
+
+### 2. Generate test reports
+```bash
+cd simulator/field_reports
+pip install -r requirements.txt
+python generate_reports.py --count 50 --bbox "<lat_min>,<lon_min>,<lat_max>,<lon_max>"
+```
+
+### 3. Open the dashboard
+*http://localhost:3000* — the map renders the seeded waste locations using the palette above, with a visible legend for both dimensions.
+
+---
+
+## 🎭 Usage & Scenarios
+
+| Objective | Scenario | Expected behaviour |
+|------|-------|-----------|
+| 1 | Field agent submits a report offline, then regains connectivity | Report is queued locally and synced; location appears on the map after sync. |
+| 1 | IoT bin reports an increasing fill level | Corresponding waste location's amount bucket escalates and its colour updates. |
+| 2 | Operator filters to "High/Overflow + Impassable road" | Only waste locations matching both dimensions remain visible; legend reflects the filter. |
+| 2 | Operator zooms into a dense district	Markers cluster; | clusters split as zoom increases without a full re‑fetch. |
+| 3 | Operator requests the SPF for a specific waste location | Request created in REQUESTED; SPF notified; dashboard shows the request on the map and in the queue. |
+| 3 | SPF marks the request COLLECTED | Status propagates over the real‑time channel to all connected clients within seconds; the location's amount bucket is reset to clear. |
+| 3 | A second district's operator logs in | They see only their jurisdiction's waste locations and requests. |
+
