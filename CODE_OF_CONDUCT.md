@@ -55,35 +55,17 @@ This project is graded, and credit matters. In every PR description, state who d
 
 Branch names are not cosmetic. In a shared repository, the branch name is how your teammates know **what you are working on, which objective it serves, and that the work is yours** — before they read a single line of code. Clear naming is how we avoid two students building the same thing, and how a reviewer can tell at a glance whether a change is in scope.
 
-<type>/<objective>/<short-slug>
-
 | Part | Values | Meaning |
 |------|--------|---------|
 | **type** | `feat` · `fix` · `docs` · `refactor` · `test` · `chore` · `adr` | What kind of change this is |
 | **objective** | `obj1` · `obj2` · `obj3` (or `chore`) | Which project objective the work advances |
+| **student name** | | name of the student | Provide the name of the student that is doing the submission
 | **slug** | short, hyphenated, lowercase | What specifically you are changing |
 
 **Examples**
 
 ```bash
-feat/obj2/road-condition-layer
-fix/obj1/offline-sync-duplicate-reports
+feat/obj2/mansa musa /road-condition-layer
+fix/obj1/lindsay abott/ offline-sync-duplicate-reports
 adr/obj3/realtime-backplane-choice
 
----
-
-## Consistency check across your three files
-
-The branch convention is now referenced in three places, each with a distinct job. Confirm they match before you commit:
-
-| File | Role in branch naming | Action needed |
-|------|----------------------|---------------|
-| **`CODE_OF_CONDUCT.md`** | States *why* it matters and what is unacceptable (claim‑jumping, force‑push, misleading names). Defer to CONTRIBUTING as normative. | ✅ Done above |
-| **`CONTRIBUTING.md`** | The normative mechanics: type prefixes, slug rules, `git fetch upstream` / rebase commands, squash‑merge. | Already present — no change needed |
-| **`.github/PULL_REQUEST_TEMPLATE.md`** | Enforces it at review time. | ⚠️ **Still to do.** Add the checklist line below |
-
-Add this to the PR template checklist so the rule survives past week one:
-
-```markdown
-- [ ] Branch name follows `<type>/<objective>/<slug>` (e.g. `feat/obj2/road-condition-layer`)
-The full convention, with the type prefixes and slug rules, is in [`CONTRIBUTING.md` → Branching Strategy](CONTRIBUTING.md#branching-strategy). The principle is:
