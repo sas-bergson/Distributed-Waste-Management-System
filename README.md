@@ -13,6 +13,7 @@
 - [Project Objectives](#-project-objectives)
 - [Glossary](#-glossary)
 - [Architecture Overview](#--architecture-overview)
+- [Microservices Inventory](docs/architecture/microservices.md)
 - [Map & Color Palette Specification](#-map--color-palette-specification)
 - [Key Features](#-key-features)
 - [Technology Stack](#️-technology-stack)
