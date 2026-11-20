@@ -1,0 +1,209 @@
+services:
+  # --- INFRASTRUCTURE & DATA STORES ---
+  postgis:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: dwms-postgis
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dwms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dwms_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-dwms_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgis_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dwms} -d ${POSTGRES_DB:-dwms_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: dwms-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: dwms-mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    command: mosquitto -c /mosquitto-no-auth.conf
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t healthcheck -m ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  # --- SIX CORE MICROSERVICES ---
+  gateway:
+    build:
+      context: ./services/gateway
+    image: dwms/gateway:local
+    container_name: dwms-gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - REDIS_URL=redis://redis:6379
+      - LOCATIONS_URL=http://locations:8001
+      - MAP_URL=http://map:8002
+      - REQUESTS_URL=http://requests:8003
+      - REALTIME_URL=http://realtime:8004
+    depends_on:
+      redis:
+        condition: service_healthy
+      locations:
+        condition: service_healthy
+      map:
+        condition: service_healthy
+      requests:
+        condition: service_healthy
+      realtime:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  locations:
+    build:
+      context: ./services/locations
+    image: dwms/locations:local
+    container_name: dwms-locations
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-dwms}:${POSTGRES_PASSWORD:-dwms_secret}@postgis:5432/${POSTGRES_DB:-dwms_db}
+      - REDIS_URL=redis://redis:6379
+      - MQTT_BROKER_URL=mqtt://mosquitto:1883
+    depends_on:
+      postgis:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  map:
+    build:
+      context: ./services/map
+    image: dwms/map:local
+    container_name: dwms-map
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-dwms}:${POSTGRES_PASSWORD:-dwms_secret}@postgis:5432/${POSTGRES_DB:-dwms_db}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgis:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8002/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  requests:
+    build:
+      context: ./services/requests
+    image: dwms/requests:local
+    container_name: dwms-requests
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-dwms}:${POSTGRES_PASSWORD:-dwms_secret}@postgis:5432/${POSTGRES_DB:-dwms_db}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      postgis:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8003/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  realtime:
+    build:
+      context: ./services/realtime
+    image: dwms/realtime:local
+    container_name: dwms-realtime
+    ports:
+      - "8004:8004"
+    environment:
+      - PORT=8004
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8004/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+  notifications:
+    build:
+      context: ./services/notifications
+    image: dwms/notifications:local
+    container_name: dwms-notifications
+    ports:
+      - "8005:8005"
+    environment:
+      - PORT=8005
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8005/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dwms-net
+
+volumes:
+  postgis_data:
+  redis_data:
+
+networks:
+  dwms-net:
+    driver: bridge
