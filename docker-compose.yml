@@ -1,0 +1,341 @@
+name: dwms
+
+x-db-env: &db-env
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgis:5432/${POSTGRES_DB:-dwms}
+    REDIS_URL: redis://redis:6379/0
+
+x-common: &common
+    restart: unless-stopped
+    networks: [dwms-net]
+
+services:
+    # ───────────────────────── Infrastructure ─────────────────────────
+    postgis:
+        <<: *common
+        image: imresamu/postgis:18-recent-bookworm
+        container_name: dwms-postgis
+        environment:
+            POSTGRES_USER: ${POSTGRES_USER:-postgres}
+            POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+            POSTGRES_DB: ${POSTGRES_DB:-dwms}
+        ports:
+            - '5432:5432'
+        volumes:
+            - postgis_data:/var/lib/postgresql
+        healthcheck:
+            test:
+                [
+                    'CMD-SHELL',
+                    'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}',
+                ]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+            start_period: 10s
+
+    redis:
+        <<: *common
+        image: redis:7-alpine
+        container_name: dwms-redis
+        command: ['redis-server', '--appendonly', 'yes']
+        ports:
+            - '6379:6379'
+        volumes:
+            - redis_data:/data
+        healthcheck:
+            test: ['CMD', 'redis-cli', 'ping']
+            interval: 5s
+            timeout: 3s
+            retries: 10
+
+    mosquitto:
+        <<: *common
+        image: eclipse-mosquitto:2
+        container_name: dwms-mosquitto
+        ports:
+            - '1883:1883' # MQTT
+            - '9001:9001' # MQTT over WebSockets
+        configs:
+            - source: mosquitto_conf
+              target: /mosquitto/config/mosquitto.conf
+        volumes:
+            - mosquitto_data:/mosquitto/data
+        healthcheck:
+            test:
+                [
+                    'CMD-SHELL',
+                    'mosquitto_pub -h localhost -p 1883 -t healthcheck -m ok -q 0 || exit 1',
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 5s
+
+    # ───────────────────────── Microservices ─────────────────────────
+    gateway:
+        <<: *common
+        build: ./services/gateway
+        container_name: dwms-gateway
+        environment:
+            NODE_ENV: production
+            PORT: 8000
+            JWT_SECRET: ${JWT_SECRET:-change-me-in-prod}
+            CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
+            RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+            RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-1 minute}
+            LOCATIONS_URL: http://locations:8001
+            MAP_URL: http://map:8002
+            REQUESTS_URL: http://requests:8003
+            REALTIME_URL: http://realtime:8004
+            NOTIFICATIONS_URL: http://notifications:8005
+        ports:
+            - '8000:8000'
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'node',
+                    '-e',
+                    "fetch('http://localhost:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
+        depends_on:
+            locations: { condition: service_healthy }
+            map: { condition: service_healthy }
+            requests: { condition: service_healthy }
+            realtime: { condition: service_healthy }
+            notifications: { condition: service_healthy }
+
+    locations:
+        <<: *common
+        build: ./services/locations
+        container_name: dwms-locations
+        environment:
+            <<: *db-env
+        command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8001"
+        ports:
+            - '8001:8001'
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8001/health', timeout=3)",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+        depends_on:
+            postgis: { condition: service_healthy }
+            redis: { condition: service_healthy }
+            mosquitto: { condition: service_healthy }
+
+    map:
+        <<: *common
+        build: ./services/map
+        container_name: dwms-map
+        environment:
+            <<: *db-env
+            PALETTE_PATH: /config/palette.json
+        volumes:
+            - ./config/palette.json:/config/palette.json:ro
+        command: uvicorn app.main:app --host 0.0.0.0 --port 8002
+        ports:
+            - '8002:8002'
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+        depends_on:
+            postgis: { condition: service_healthy }
+            redis: { condition: service_healthy }
+
+    requests:
+        <<: *common
+        build: ./services/requests
+        container_name: dwms-requests
+        environment:
+            <<: *db-env
+            LOCATIONS_URL: http://locations:8001
+            NOTIFICATIONS_URL: http://notifications:8005
+        command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8003"
+        ports:
+            - '8003:8003'
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8003/health', timeout=3)",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+        depends_on:
+            postgis: { condition: service_healthy }
+            redis: { condition: service_healthy }
+            locations: { condition: service_healthy }
+            notifications: { condition: service_healthy }
+
+    realtime:
+        <<: *common
+        build: ./services/realtime
+        container_name: dwms-realtime
+        environment:
+            NODE_ENV: production
+            PORT: 8004
+            REDIS_URL: redis://redis:6379/0
+            JWT_SECRET: ${JWT_SECRET:-change-me-in-prod}
+            CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
+        ports:
+            - '8004:8004' # WebSocket/SSE accessible directement par les frontends
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'node',
+                    '-e',
+                    "fetch('http://localhost:8004/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 10s
+        depends_on:
+            redis: { condition: service_healthy }
+
+    notifications:
+        <<: *common
+        build: ./services/notifications
+        container_name: dwms-notifications
+        environment: &notif-env
+            <<: *db-env
+            SMTP_HOST: ${SMTP_HOST:-mailpit}
+            SMTP_PORT: ${SMTP_PORT:-1025}
+            SMS_PROVIDER_URL: ${SMS_PROVIDER_URL:-}
+            PUSH_PROVIDER_URL: ${PUSH_PROVIDER_URL:-}
+        command: uvicorn app.main:app --host 0.0.0.0 --port 8005
+        ports:
+            - '8005:8005'
+        healthcheck:
+            test:
+                [
+                    'CMD',
+                    'python',
+                    '-c',
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8005/health', timeout=3)",
+                ]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 20s
+        depends_on:
+            postgis: { condition: service_healthy }
+            redis: { condition: service_healthy }
+
+    notifications-worker:
+        <<: *common
+        build: ./services/notifications
+        container_name: dwms-notifications-worker
+        environment: *notif-env
+        # arq : `arq app.worker.WorkerSettings` — Celery : `celery -A app.worker worker -l info`
+        command: arq app.worker.WorkerSettings
+        depends_on:
+            postgis: { condition: service_healthy }
+            redis: { condition: service_healthy }
+
+    mailpit:
+        <<: *common
+        image: axllent/mailpit:latest
+        container_name: dwms-mailpit
+        ports:
+            - '8025:8025' # UI de test des emails
+
+    # ───────────────────────── Frontends ─────────────────────────
+    dashboard:
+        <<: *common
+        build:
+            context: ./frontend/dashboard
+            args:
+                VITE_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+                VITE_WS_URL: ${PUBLIC_WS_URL:-ws://localhost:8004}
+        container_name: dwms-dashboard
+        ports:
+            - '5173:80'
+        depends_on:
+            gateway: { condition: service_healthy }
+
+    reporter:
+        <<: *common
+        build:
+            context: ./frontend/reporter
+            args:
+                VITE_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+        container_name: dwms-reporter
+        ports:
+            - '5174:80'
+        depends_on:
+            gateway: { condition: service_healthy }
+
+    # ───────────────────────── Simulateurs (profile "sim") ─────────────────────────
+    # Lancer avec : docker compose --profile sim up -d
+    iot-bins:
+        <<: *common
+        profiles: [sim]
+        build: ./simulator/iot_bins
+        container_name: dwms-sim-iot-bins
+        environment:
+            MQTT_HOST: mosquitto
+            MQTT_PORT: 1883
+            MQTT_TOPIC_PREFIX: ${MQTT_TOPIC_PREFIX:-dwms/bins}
+            BIN_COUNT: ${SIM_BIN_COUNT:-50}
+            INTERVAL_SECONDS: ${SIM_INTERVAL_SECONDS:-5}
+        depends_on:
+            mosquitto: { condition: service_healthy }
+
+    field-reports:
+        <<: *common
+        profiles: [sim]
+        build: ./simulator/field_reports
+        container_name: dwms-sim-field-reports
+        environment:
+            API_URL: http://gateway:8000
+            REPORTS_PER_MINUTE: ${SIM_REPORTS_PER_MINUTE:-10}
+        depends_on:
+            gateway: { condition: service_healthy }
+
+configs:
+    mosquitto_conf:
+        content: |
+            listener 1883
+            protocol mqtt
+            listener 9001
+            protocol websockets
+            allow_anonymous true
+            persistence true
+            persistence_location /mosquitto/data/
+
+volumes:
+    postgis_data:
+    redis_data:
+    mosquitto_data:
+
+networks:
+    dwms-net:
+        name: dwms-net
+        driver: bridge
