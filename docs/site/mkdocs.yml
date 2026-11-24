@@ -1,0 +1,17 @@
+site_name: Distributed Waste Management System (DWMS)
+site_description: Documentation portal for the DWMS cloud-native microservices platform.
+docs_dir: .
+site_dir: _build
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+
+exclude_docs: |
+  requirements.txt
+  mkdocs.yml
