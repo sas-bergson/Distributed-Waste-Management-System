@@ -1,0 +1,56 @@
+# map - multi-replica (M), stateless. Placeholder (nginx) until services/map has its own image.
+# To replace it: change `image` and, if the service listens elsewhere, the ports and probes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: map
+  labels:
+    app: map
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: map
+  template:
+    metadata:
+      labels:
+        app: map
+    spec:
+      containers:
+        - name: map
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: map
+  labels:
+    app: map
+spec:
+  selector:
+    app: map
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

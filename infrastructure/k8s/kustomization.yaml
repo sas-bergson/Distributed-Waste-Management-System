@@ -1,0 +1,19 @@
+# DWMS Kubernetes manifests (Feature 3 - K8s manifests).
+# Apply everything with:  kubectl apply -k infrastructure/k8s
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: dwms
+resources:
+  - namespace.yaml
+  - postgis.yaml
+  - redis.yaml
+  - mosquitto.yaml
+  - gateway.yaml
+  - locations.yaml
+  - map.yaml
+  - requests.yaml
+  - realtime.yaml
+  - notifications.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: dwms
