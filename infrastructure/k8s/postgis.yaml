@@ -1,0 +1,81 @@
+# PostGIS - stateful (ST), single replica, data on a PersistentVolumeClaim.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgis-credentials
+type: Opaque
+stringData:
+  # Development values only. Real secret handling is Feature 6 (Secrets management).
+  POSTGRES_USER: dwms
+  POSTGRES_PASSWORD: dwms_dev
+  POSTGRES_DB: dwms
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgis
+  labels:
+    app: postgis
+spec:
+  selector:
+    app: postgis
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgis
+  labels:
+    app: postgis
+spec:
+  serviceName: postgis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgis
+  template:
+    metadata:
+      labels:
+        app: postgis
+    spec:
+      containers:
+        - name: postgis
+          image: postgis/postgis:16-3.4
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgis-credentials
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
