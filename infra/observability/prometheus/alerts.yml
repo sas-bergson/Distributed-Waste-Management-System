@@ -1,0 +1,38 @@
+groups:
+  - name: dwms-service-health
+    rules:
+      - alert: DWMSServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DWMS service {{ $labels.job }} is down"
+          description: "Target {{ $labels.instance }} in job {{ $labels.job }} has been unreachable for more than 1 minute."
+
+      - alert: DWMSHighErrorRate
+        expr: |
+          (
+            sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum by (job) (rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.job }}"
+          description: "Service {{ $labels.job }} has exceeded a 5% 5xx error rate over the last 5 minutes."
+
+      - alert: DWMSHighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (job, le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p99 latency on {{ $labels.job }}"
+          description: "Service {{ $labels.job }} p99 request latency has exceeded 500 ms over the last 5 minutes."
