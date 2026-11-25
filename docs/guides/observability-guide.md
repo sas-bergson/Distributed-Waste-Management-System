@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide documents the local observability stack for the Distributed Waste Management System (DWMS), built with **Prometheus (2.54.1)** and **Grafana (11.2.2)**. Both services attach to the external dwms-net Docker network to collect metrics and visualize health, traffic, error rates, and latency across all core platform services.
+This guide documents the local observability stack for the Distributed Waste Management System (DWMS), built with **Prometheus (v2.54.1)** and **Grafana (11.2.2)**. Both services attach to the external dwms-net Docker network to collect metrics and visualize health, traffic, error rates, and latency across all core platform services.
 
 ## Directory Structure
 
@@ -16,7 +16,7 @@ infra/observability/
     ├── compose.yml
     └── provisioning/
         ├── datasources/
-        │   └── datasource.yml
+        │   └── prometheus.yml
         └── dashboards/
             ├── provider.yml
             └── dwms-overview.json
@@ -53,7 +53,7 @@ docker compose -f infra/observability/grafana/compose.yml ps
 | :--- | :--- | :--- | :--- |
 | Prometheus UI | http://localhost:9090 | 9090 | Targets, PromQL queries, alert rules |
 | Prometheus Health | http://localhost:9090/-/healthy | 9090 | Liveness/readiness check |
-| Grafana UI | http://localhost:3002 | 3000 | Dashboards (dmin / dmin by default) |
+| Grafana UI | http://localhost:3002 | 3000 | Dashboards (admin / admin by default) |
 | Grafana Health | http://localhost:3002/api/health | 3000 | Host healthcheck endpoint (3000 is internal) |
 
 ## Scrape Targets
@@ -65,32 +65,30 @@ Prometheus scrapes /metrics every **15 seconds** across all six DWMS services on
 | gateway | gateway:8080 | core | API Gateway |
 | locations | locations:8001 | 1 | Waste-location collection |
 | map | map:8002 | 2 | Color-coded waste & road condition map |
-| equests | equests:8003 | 3 | Collection request processing |
-| ealtime | ealtime:8004 | 3 | Live map updates & SPF routing |
-| 
-otifications | 
-otifications:8005 | 3 | Alerts & user notifications |
+| requests | requests:8003 | 3 | Collection request processing |
+| realtime | realtime:8004 | 3 | Live map updates & SPF routing |
+| notifications | notifications:8005 | 3 | Alerts & user notifications |
 
-## Alerting Rules (lerts.yml)
+## Alerting Rules (alerts.yml)
 
 | Alert Name | Condition | For | Severity | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | DWMSServiceDown | up == 0 | 1m | critical | Target service is unreachable or down |
 | DWMSHighErrorRate | 5xx error ratio > 5% over 5m | 2m | warning | Elevated HTTP 5xx server error rate |
-| DWMSHighLatencyP99 | p99 request latency > 1s over 5m | 5m | warning | 99th percentile latency exceeds 1 second |
+| DWMSHighLatencyP99 | p99 request latency > 0.5 (500 ms) over 5m | 5m | warning | 99th percentile latency exceeds 500ms |
 
 ## Provisioned Grafana Dashboard
 
 Grafana automatically provisions the dwms-prometheus datasource and loads the **DWMS Service Overview** (dwms-overview) dashboard with four panels:
 
 1. **Service Up** (up)
-2. **Request Rate** (ate(http_requests_total[5m]))
+2. **Request Rate** (rate(http_requests_total[5m]))
 3. **5xx Error Rate** (5xx ratio over 5m)
 4. **p99 Latency** (histogram_quantile(0.99, ...))
 
 ## Troubleshooting
 
-- **
-etwork dwms-net declared as external, but could not be found:** Start the main stack (docker compose up -d) or run docker network create dwms-net first.
+- **network dwms-net declared as external, but could not be found:** Start the main stack (docker compose up -d) or run docker network create dwms-net first.
 - **Targets showing DOWN in Prometheus (http://localhost:9090/targets):** Ensure the backend microservices are running on dwms-net and exposing /metrics on their configured ports.
 - **Port 3002 or 9090 already in use:** Check for conflicting local processes or stop existing containers with docker compose down.
+
