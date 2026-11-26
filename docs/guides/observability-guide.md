@@ -4,6 +4,15 @@
 
 This guide documents the local observability stack for the Distributed Waste Management System (DWMS), built with **Prometheus (v2.54.1)** and **Grafana (11.2.2)**. Both services attach to the external dwms-net Docker network to collect metrics and visualize health, traffic, error rates, and latency across all core platform services.
 
+## Source of Truth
+
+Configuration files under `infra/observability/` are the source of truth for ports, scrape intervals, targets, alert thresholds, and provisioned Grafana dashboards:
+
+- **Prometheus:** `infra/observability/prometheus/compose.yml`, `infra/observability/prometheus/prometheus.yml`, `infra/observability/prometheus/alerts.yml`
+- **Grafana:** `infra/observability/grafana/compose.yml`, `infra/observability/grafana/provisioning/datasources/prometheus.yml`, `infra/observability/grafana/provisioning/dashboards/provider.yml`, `infra/observability/grafana/provisioning/dashboards/dwms-overview.json`
+
+Whenever a pull request modifies any of these files (such as ports, service targets, or alert rules), update this guide in the same pull request to keep the documentation aligned.
+
 ## Directory Structure
 
 ```text
