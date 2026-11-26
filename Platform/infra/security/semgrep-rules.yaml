@@ -1,0 +1,47 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Python Rules (FastAPI, GeoAlchemy2, SQLAlchemy)
+  # ---------------------------------------------------------------------------
+  - id: dwms-avoid-raw-sql-formatting
+    languages: [python]
+    severity: ERROR
+    message: "Potential SQL injection in PostGIS/Postgres query. Use parameterized queries or SQLAlchemy text() binds."
+    patterns:
+      - pattern-either:
+          - pattern: $SESSION.execute(f"... {$VAR} ...")
+          - pattern: $SESSION.execute("..." % $VAR)
+          - pattern: $CONN.execute(f"... {$VAR} ...")
+
+  - id: dwms-hardcoded-secret-assignment
+    languages: [python, javascript, typescript]
+    severity: ERROR
+    message: "Hardcoded secret or credential detected. Pull from environment or secret manager."
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $SECRET = "..."
+          - pattern: |
+              JWT_SECRET = "..."
+          - pattern: |
+              POSTGRES_PASSWORD = "..."
+    paths:
+      exclude:
+        - "**/*.example"
+        - "**/tests/**"
+        - "**/*.test.*"
+        - "**/*.spec.*"
+
+  # ---------------------------------------------------------------------------
+  # TypeScript / Fastify Rules (Gateway, Realtime)
+  # ---------------------------------------------------------------------------
+  - id: dwms-fastify-avoid-wildcard-cors
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: "Avoid wildcard CORS ('*') with credentials enabled in production."
+    pattern: |
+      $APP.register(require('@fastify/cors'), {
+        ...,
+        origin: true,
+        credentials: true,
+        ...
+      })

@@ -1,0 +1,22 @@
+# Bandit SAST Configuration for DWMS Python Services
+# Target services: locations, map, requests, notifications, and simulators
+# Focus: SQL injection, hardcoded credentials, insecure subprocess, weak cryptography
+
+# Skips / exclusions
+skips:
+  - B101  # assert_used (used extensively in pytest suites)
+
+# Exclude test directories, virtual environments, and caches from SAST scan
+exclude_dirs:
+  - '/tests/'
+  - '/.venv/'
+  - '/venv/'
+  - '/__pycache__/'
+  - '/node_modules/'
+
+# Severity and confidence levels
+# Fails build on High / Medium security issues
+# B301: pickle check
+# B303: MD5/SHA1 weak hash check
+# B501: certificate validation disabled check
+# B608: SQL injection via string formatting (crucial for PostGIS raw queries)

@@ -1,0 +1,29 @@
+# Trivy Scanner Configuration for DWMS
+# Scans filesystem for container vulnerabilities, misconfigurations, and license compliance
+
+# Vulnerability scan settings
+severity:
+  - HIGH
+  - CRITICAL
+
+# Fail scan if HIGH or CRITICAL vulnerabilities are found
+exit-code: 1
+
+# Ignore unpatched/vendor-wontfix vulnerabilities to minimize noise
+ignore-unfixed: true
+
+scan:
+  scanners:
+    - vuln
+    - misconfig
+    - secret
+
+format: table
+
+# Skip local virtualenvs, node_modules, and git history
+skip-dirs:
+  - "**/.venv"
+  - "**/venv"
+  - "**/node_modules"
+  - "**/.git"
+  - "**/test-results"
