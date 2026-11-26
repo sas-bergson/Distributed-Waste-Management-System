@@ -1,0 +1,85 @@
+name: Backup recovery contract tests
+
+on:
+  push:
+    branches: [feat/chore/backup-dr]
+  pull_request:
+    paths:
+      - tests/backup/**
+      - infrastructure/backup/**
+      - .github/workflows/backup-dr-tests.yml
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Resolve test dependency
+        id: tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f tests/backup/test_dr_restore.py; then
+            echo 'path=.' >> "$GITHUB_OUTPUT"
+            echo "Test commit: $(git rev-parse HEAD)"
+          else
+            sha=$(git ls-remote https://github.com/lekeanyiKerring/Distributed-Waste-Management-System.git refs/heads/test/chore/dr-restore | cut -f1)
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'FAIL: TEST branch is unavailable'; exit 1; }
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo 'path=.feature8-tests' >> "$GITHUB_OUTPUT"
+            echo "Test commit: $sha"
+          fi
+      - name: Check out resolved tests
+        if: steps.tests.outputs.sha != ''
+        uses: actions/checkout@v4
+        with:
+          repository: lekeanyiKerring/Distributed-Waste-Management-System
+          ref: ${{ steps.tests.outputs.sha }}
+          path: .feature8-tests
+          persist-credentials: false
+      - name: Resolve implementation dependency
+        id: implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f infrastructure/backup/backup.py; then
+            echo 'path=infrastructure/backup/backup.py' >> "$GITHUB_OUTPUT"
+            echo "Implementation commit: $(git rev-parse HEAD)"
+          else
+            sha=$(git ls-remote https://github.com/lekeanyiKerring/Distributed-Waste-Management-System.git refs/heads/feat/chore/backup-dr | cut -f1)
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'FAIL: IMP branch is unavailable'; exit 1; }
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo 'path=.feature8-implementation/infrastructure/backup/backup.py' >> "$GITHUB_OUTPUT"
+            echo "Implementation commit: $sha"
+          fi
+      - name: Check out resolved implementation
+        if: steps.implementation.outputs.sha != ''
+        uses: actions/checkout@v4
+        with:
+          repository: lekeanyiKerring/Distributed-Waste-Management-System
+          ref: ${{ steps.implementation.outputs.sha }}
+          path: .feature8-implementation
+          persist-credentials: false
+      - run: python -m pip install ruff==0.11.13 mypy==1.15.0
+      - name: Check test lint, formatting and types
+        env:
+          FEATURE8_TEST_ROOT: ${{ steps.tests.outputs.path }}
+        run: |
+          ruff check "$FEATURE8_TEST_ROOT/tests/backup"
+          ruff format --check "$FEATURE8_TEST_ROOT/tests/backup"
+          mypy "$FEATURE8_TEST_ROOT/tests/backup"
+      - name: Run six real PostGIS recovery tests
+        env:
+          DWMS_RUN_DR_INTEGRATION: '1'
+          DWMS_BACKUP_TOOL: ${{ github.workspace }}/${{ steps.implementation.outputs.path }}
+          FEATURE8_TEST_ROOT: ${{ steps.tests.outputs.path }}
+        run: python -m unittest discover -s "$FEATURE8_TEST_ROOT/tests/backup" -p 'test_*.py' -v

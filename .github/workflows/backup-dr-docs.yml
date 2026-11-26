@@ -1,0 +1,124 @@
+name: Backup recovery documentation
+
+on:
+  push:
+    branches: [feat/chore/backup-dr]
+  pull_request:
+    paths:
+      - docs/runbooks/backup-dr.md
+      - docs/runbooks/backup-drill-record.md
+      - docs/architecture/adr/0008-backup-dr.md
+      - docs/guides/backup-dr-tutorial.md
+      - docs/api/backup-cli.md
+      - docs/assessment/feature8-requirements.md
+      - infrastructure/backup/**
+      - .github/workflows/backup-dr-docs.yml
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    name: Check documentation and run recovery tutorial
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Resolve documentation dependency
+        id: documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f docs/guides/backup-dr-tutorial.md; then
+            echo 'path=.' >> "$GITHUB_OUTPUT"
+            echo "Documentation commit: $(git rev-parse HEAD)"
+          else
+            sha=$(git ls-remote https://github.com/lekeanyiKerring/Distributed-Waste-Management-System.git refs/heads/docs/chore/dr-runbook | cut -f1)
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'FAIL: DOC branch is unavailable'; exit 1; }
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo 'path=.feature8-docs' >> "$GITHUB_OUTPUT"
+            echo "Documentation commit: $sha"
+          fi
+      - name: Check out resolved documentation
+        if: steps.documentation.outputs.sha != ''
+        uses: actions/checkout@v4
+        with:
+          repository: lekeanyiKerring/Distributed-Waste-Management-System
+          ref: ${{ steps.documentation.outputs.sha }}
+          path: .feature8-docs
+          persist-credentials: false
+      - name: Resolve implementation dependency
+        id: implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -f infrastructure/backup/backup.py; then
+            echo 'path=infrastructure/backup/backup.py' >> "$GITHUB_OUTPUT"
+            echo "Implementation commit: $(git rev-parse HEAD)"
+          else
+            sha=$(git ls-remote https://github.com/lekeanyiKerring/Distributed-Waste-Management-System.git refs/heads/feat/chore/backup-dr | cut -f1)
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo 'FAIL: IMP branch is unavailable'; exit 1; }
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
+            echo 'path=.feature8-implementation/infrastructure/backup/backup.py' >> "$GITHUB_OUTPUT"
+            echo "Implementation commit: $sha"
+          fi
+      - name: Check out resolved implementation
+        if: steps.implementation.outputs.sha != ''
+        uses: actions/checkout@v4
+        with:
+          repository: lekeanyiKerring/Distributed-Waste-Management-System
+          ref: ${{ steps.implementation.outputs.sha }}
+          path: .feature8-implementation
+          persist-credentials: false
+      - name: Check Markdown and extract tutorial
+        env:
+          FEATURE8_DOCS_ROOT: ${{ steps.documentation.outputs.path }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          root = Path(os.environ['FEATURE8_DOCS_ROOT'])
+          pages = [
+              'docs/runbooks/backup-dr.md',
+              'docs/runbooks/backup-drill-record.md',
+              'docs/architecture/adr/0008-backup-dr.md',
+              'docs/guides/backup-dr-tutorial.md',
+              'docs/api/backup-cli.md',
+              'docs/assessment/feature8-requirements.md',
+          ]
+          for relative in pages:
+              path = root / relative
+              text = path.read_text(encoding='utf-8')
+              assert text.startswith('# '), f'{path}: missing title'
+              assert sum(line.startswith('```') for line in text.splitlines()) % 2 == 0, f'{path}: unclosed code fence'
+              for link in re.findall(r'\]\(([^)]+)\)', text):
+                  if not link.startswith(('https://', '#')):
+                      assert (path.parent / link).is_file(), f'{path}: missing {link}'
+              print(f'PASS: {relative}')
+          text = (root / 'docs/guides/backup-dr-tutorial.md').read_text(encoding='utf-8')
+          blocks = re.findall(r'```bash\n(.*?)```', text, re.S)
+          assert len(blocks) == 6, f'Expected six tutorial blocks, got {len(blocks)}'
+          Path('/tmp/backup-tutorial.sh').write_text('\n\n'.join(blocks) + '\n', encoding='utf-8')
+          PY
+      - name: Run the documented recovery tutorial
+        env:
+          DWMS_BACKUP_TOOL: ${{ github.workspace }}/${{ steps.implementation.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n /tmp/backup-tutorial.sh
+          bash /tmp/backup-tutorial.sh 2>&1 | tee tutorial-output.txt
+      - name: Keep tutorial output for review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-tutorial-output
+          path: tutorial-output.txt
+          if-no-files-found: warn
+          retention-days: 14
