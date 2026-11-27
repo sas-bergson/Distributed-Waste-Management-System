@@ -1,0 +1,480 @@
+
+openapi: 3.1.0
+info:
+  title: DWMS Reporter PWA — Contrat Edge et Client
+  version: 0.1.0
+  summary: Ce que sert la PWA Reporter et ce qu'elle attend de l'API (Objectif 1, Feature 44).
+  description: |
+    L'application Reporter (`frontend/reporter/`) est livrée en mode **edge** : des fichiers statiques
+    servis depuis un CDN, sans conteneur backend dédié. Ce document fixe donc à la fois :
+    (a) les fichiers exposés sur le CDN pour rendre l'application installable, traduisible et utilisable hors ligne,
+    et (b) les règles concrètes que suit l'application lorsqu'elle appelle l'API Waste Report.
+
+    **Responsable :** Feature 44 / IMP — Odile-hol (branche `feat/obj1/Odile-hol/fr-pwa`).
+    **Objectif :** 1 — Collecter les informations de localisation des déchets.
+
+    ### Règles de fonctionnement (conventions)
+    - **Langues gérées :** `en` (par défaut) et `fr`. Le choix de l'utilisateur reste enregistré sur l'appareil et est transmis à l'API via l'en-tête `Accept-Language`.
+    - **Ce qui est traduit ou non :** seuls les textes destinés aux utilisateurs sont traduits. Les noms de champs, les valeurs d'énumérations (`amount_bucket`, `waste_type`, `location_source`, ...) et les codes d'erreur restent toujours identiques.
+    - **Lecture des erreurs :** la PWA se base sur `error.code` (et `error.details[].code` pour les champs) pour afficher la bonne traduction ; elle ne devine jamais l'erreur en lisant le texte `message` renvoyé par le serveur.
+    - **Mode hors ligne et rejeu :** les signalements créés sans réseau sont gardés dans l'IndexedDB de l'appareil puis rejoués dans l'ordre FIFO (`queued_at` / `local_id`) dès que la connexion revient.
+      `observed_at` garde bien l'heure à laquelle les déchets ont été vus sur le terrain (pas l'heure de renvoi). Une fois confirmés (`200`/`201` ou confirmation de rejeu idempotent), ils passent à l'état `synced`.
+    - **Dates et heures :** au format ISO 8601 / RFC 3339 en UTC.
+
+    ### Appels vers l'API (toujours via la passerelle)
+    L'application n'appelle jamais un microservice directement. Les routes publiques suivent les règles de la passerelle du cours : `POST /v1/api/locations/reports` (Feature 18), avec le jeton JWT dans `Authorization: Bearer`.
+    - **En-têtes envoyés par l'application :** `Authorization`, `Accept-Language`, et `X-Idempotency-Key` sur `POST` (égal au `local_id` du signalement, pour éviter les doublons lors d'un rejeu).
+    - **En-têtes jamais envoyés par l'application :** `X-Tenant-Id` et `X-User-Id`. C'est la passerelle qui les ajoute depuis le JWT et qui nettoie toute valeur venue du client.
+    - **En-tête lu par l'application :** `X-Request-Id` sur chaque réponse. Il est affiché sur l'écran d'erreur afin que l'utilisateur puisse le transmettre facilement au support.
+    - **Gestion des erreurs :** l'application attend l'enveloppe de la passerelle `{"error": {"code", "message", "request_id"}}` (`ErrorEnvelope`).
+      `401` renvoie vers la connexion ; `429` est retenté après `Retry-After` ; `502` et `503` laissent le signalement dans la file hors ligne ; `422` s'affiche directement près des champs concernés.
+
+    ### Accessibilité (critère de fin : WCAG 2.2 niveau AA)
+    - Contraste d'au moins 4.5:1 pour le texte (3:1 pour les grands textes et composants d'interface).
+    - Les teintes claires de la palette (par exemple l'ambre clair `#F9A825`, autour de 2:1 sur fond blanc) ne doivent jamais porter l'information à elles seules :
+      chaque `amount_bucket` affiche aussi son libellé texte et son glyphe, comme le demande le README.
+    - Chaque champ (y compris le sélecteur de langue `en`/`fr`) a un libellé visible et relié programmatiquement.
+    - Les erreurs de validation et les changements d'état (`offline`, `queued`, `syncing`, `synced`, `failed`) sont annoncés aux lecteurs d'écran (`aria-live`) et associés au champ concerné (`aria-describedby` / `aria-invalid`).
+    - Le formulaire se parcourt entièrement au clavier avec un focus visible, et chaque zone tactile fait au moins 24x24 px CSS.
+    - L'attribut `lang` de la balise `<html>` suit automatiquement la langue active (`en` ou `fr`).
+
+    ### Dépendances
+    - Feature 43 — formulaire de signalement et file hors ligne (encapsulée ici dans une PWA).
+    - Feature 18 — API Waste Report (`docs/api/locations.yaml`), non redéfinie dans ce document.
+
+    ### Hors périmètre de cette feature (autres modules)
+    - Envoi de photo — Feature 19.
+    - Traitement côté serveur de `Idempotency-Key` lors des rejeux — Feature 20.
+    - Connexion et délivrance du JWT — Feature 12.
+    - Définition de l'enveloppe d'erreur passerelle — Feature 5 (la Feature 18 documente actuellement RFC 9457 Problem Details ; l'harmonisation appartient aux responsables des features 5 et 18).
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://localhost:5173
+    description: Serveur de développement Vite en local
+  - url: https://reporter.dwms.example
+    description: CDN de production (exemple / espace réservé)
+
+tags:
+  - name: pwa
+    description: Fichiers qui rendent l'application installable et utilisable hors ligne
+  - name: i18n
+    description: Packs de traduction de l'interface
+
+paths:
+  /manifest.webmanifest:
+    get:
+      tags: [pwa]
+      summary: Manifeste d'application web
+      description: Permet au navigateur de proposer l'installation de Reporter sur l'appareil.
+      operationId: getManifest
+      responses:
+        "200":
+          description: Manifeste web de l'application.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheRevalidate"
+          content:
+            application/manifest+json:
+              schema:
+                $ref: "#/components/schemas/WebAppManifest"
+              example:
+                name: DWMS Reporter
+                short_name: Reporter
+                start_url: /
+                display: standalone
+                background_color: "#ffffff"
+                theme_color: "#2E7D32"
+                lang: en
+                icons:
+                  - src: /icons/icon-192.png
+                    sizes: 192x192
+                    type: image/png
+                  - src: /icons/icon-512.png
+                    sizes: 512x512
+                    type: image/png
+                    purpose: maskable
+
+  /sw.js:
+    get:
+      tags: [pwa]
+      summary: Script du Service Worker
+      description: |
+        Pré-met en cache le shell de l'application et les packs de traduction pour les servir hors ligne,
+        sans jamais mettre en cache les requêtes `POST`, `PATCH` ni les réponses liées à `/v1/api/locations/reports`.
+        Doit toujours être revalidé afin que les mises à jour arrivent bien aux utilisateurs.
+      operationId: getServiceWorker
+      responses:
+        "200":
+          description: Script JavaScript du Service Worker.
+          headers:
+            Cache-Control:
+              $ref: "#/components/headers/CacheNoCache"
+            Service-Worker-Allowed:
+              description: Périmètre contrôlé par le Service Worker.
+              schema:
+                type: string
+                example: /
+          content:
+            text/javascript:
+              schema:
+                type: string
+
+  /offline.html:
+    get:
+      tags: [pwa]
+      summary: Page de secours hors ligne
+      description: Affichée quand une navigation échoue et qu'aucune page n'est disponible dans le cache.
+      operationId: getOfflinePage
+      responses:
+        "200":
+          description: Page HTML de secours, mise en cache dès la première visite.
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /locales/{lng}.json:
+    get:
+      tags: [i18n]
+      summary: Pack de traduction pour une langue donnée
+      operationId: getLocale
+      parameters:
+        - $ref: "#/components/parameters/Language"
+      responses:
+        "200":
+          description: Ensemble des libellés d'interface pour la langue choisie.
+          headers:
+            ETag:
+              description: Version du pack utilisée pour la revalidation conditionnelle.
+              schema:
+                type: string
+                example: '"fr-1"'
+            Cache-Control:
+              $ref: "#/components/headers/CacheRevalidate"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranslationBundle"
+        "404":
+          description: Langue non gérée ; l'application revient alors sur `en`.
+
+components:
+  parameters:
+    Language:
+      name: lng
+      in: path
+      required: true
+      description: Code de langue (`en` ou `fr`).
+      schema:
+        $ref: "#/components/schemas/SupportedLanguage"
+    AcceptLanguage:
+      name: Accept-Language
+      in: header
+      required: false
+      description: |
+        Envoyé par l'application à chaque appel à l'API Waste Report. Ne modifie que les textes lisibles par l'humain.
+        Convention proposée à valider avec la Feature 18.
+      schema:
+        $ref: "#/components/schemas/SupportedLanguage"
+    IdempotencyKey:
+      name: X-Idempotency-Key
+      in: header
+      required: false
+      description: |
+        ULID généré côté client (`QueuedReport.local_id`) et envoyé sur `POST /v1/api/locations/reports`
+        pour garantir l'idempotence lors du rejeu hors ligne (géré par la Feature 20).
+      schema:
+        type: string
+        pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+
+  headers:
+    CacheRevalidate:
+      description: Peut être mis en cache, mais doit toujours être revalidé avant utilisation.
+      schema:
+        type: string
+        example: no-cache
+    CacheNoCache:
+      description: Ne jamais servir une version périmée.
+      schema:
+        type: string
+        example: no-cache, no-store, must-revalidate
+    ContentLanguage:
+      description: Langue effectivement utilisée dans les textes de la réponse.
+      schema:
+        $ref: "#/components/schemas/SupportedLanguage"
+    RequestId:
+      description: Identifiant ULID généré par la passerelle pour suivre la requête et l'afficher en cas d'erreur.
+      schema:
+        type: string
+        example: 01HV3K8Z9Q4M2X7B5N6P1D0RTE
+
+  schemas:
+    SupportedLanguage:
+      type: string
+      enum: [en, fr]
+      default: en
+
+    AmountBucket:
+      type: string
+      enum: [empty, low, moderate, high, overflow]
+
+    WasteType:
+      type: string
+      enum: [household, plastic, organic, construction, electronic, hazardous, mixed, other]
+
+    LocationSource:
+      type: string
+      enum: [gps, manual_pin]
+
+    WebAppManifest:
+      type: object
+      required: [name, short_name, start_url, display, icons]
+      properties:
+        name:
+          type: string
+        short_name:
+          type: string
+          maxLength: 12
+        start_url:
+          type: string
+        display:
+          type: string
+          enum: [standalone, fullscreen, minimal-ui, browser]
+        background_color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+        theme_color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          description: Couleur issue de la palette (README, Dimension A, vert `empty`).
+        lang:
+          $ref: "#/components/schemas/SupportedLanguage"
+        icons:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required: [src, sizes, type]
+            properties:
+              src:
+                type: string
+              sizes:
+                type: string
+                example: 192x192
+              type:
+                type: string
+                example: image/png
+              purpose:
+                type: string
+                enum: [any, maskable]
+
+    TranslationBundle:
+      type: object
+      description: |
+        Mêmes clés dans chaque langue. Les clés sous `amount_bucket`, `waste_type` et `location_source`
+        reprennent les énumérations de l'API Waste Report (Feature 18).
+      required: [meta, form, amount_bucket, waste_type, location_source, errors, sync]
+      properties:
+        meta:
+          type: object
+          required: [lang, version]
+          properties:
+            lang:
+              $ref: "#/components/schemas/SupportedLanguage"
+            version:
+              type: integer
+              minimum: 1
+        form:
+          type: object
+          required: [title, amount_bucket, waste_type, description, use_my_location, drop_pin, submit]
+          additionalProperties:
+            type: string
+        amount_bucket:
+          type: object
+          required: [empty, low, moderate, high, overflow]
+          additionalProperties:
+            type: string
+        waste_type:
+          type: object
+          required: [household, plastic, organic, construction, electronic, hazardous, mixed, other]
+          additionalProperties:
+            type: string
+        location_source:
+          type: object
+          required: [gps, manual_pin]
+          additionalProperties:
+            type: string
+        errors:
+          type: object
+          description: Un message par `ErrorCode` (enveloppe) et par `FieldIssueCode` (champs).
+          required: [VALIDATION_ERROR, UNAUTHORIZED, RATE_LIMITED, UPSTREAM_UNAVAILABLE, INTERNAL_ERROR, required, invalid_enum, out_of_range, too_long, in_future, invalid_format]
+          additionalProperties:
+            type: string
+        sync:
+          type: object
+          description: Libellés liés à la file d'attente hors ligne et à la synchronisation.
+          required: [offline, queued, syncing, synced, failed]
+          additionalProperties:
+            type: string
+      example:
+        meta:
+          lang: fr
+          version: 1
+        form:
+          title: Signaler des déchets
+          amount_bucket: Quantité estimée
+          waste_type: Type de déchets
+          description: Description
+          use_my_location: Utiliser ma position
+          drop_pin: Placer un repère sur la carte
+          submit: Envoyer
+        amount_bucket:
+          empty: Vide
+          low: Faible
+          moderate: Modéré
+          high: Élevé
+          overflow: Débordement
+        waste_type:
+          household: Ménagers
+          plastic: Plastique
+          organic: Organique
+          construction: Construction
+          electronic: Électronique
+          hazardous: Dangereux
+          mixed: Mixte
+          other: Autre
+        location_source:
+          gps: GPS
+          manual_pin: Repère manuel
+        errors:
+          VALIDATION_ERROR: Certains champs sont invalides.
+          UNAUTHORIZED: Veuillez vous reconnecter.
+          RATE_LIMITED: Trop de requêtes, réessayez dans un instant.
+          UPSTREAM_UNAVAILABLE: Service indisponible, le signalement est gardé sur l'appareil.
+          INTERNAL_ERROR: Erreur inattendue.
+          required: Ce champ est obligatoire.
+          invalid_enum: Valeur non reconnue.
+          out_of_range: Valeur hors limites.
+          too_long: Texte trop long.
+          in_future: La date ne peut pas être dans le futur.
+          invalid_format: Format invalide.
+        sync:
+          offline: Vous êtes hors ligne.
+          queued: Signalement enregistré, il sera envoyé au retour de la connexion.
+          syncing: Envoi en cours...
+          synced: Signalement envoyé.
+          failed: Échec de l'envoi, nouvelle tentative plus tard.
+
+    ErrorCode:
+      type: string
+      description: |
+        Code machine stable de l'enveloppe passerelle. La PWA associe chacun à sa traduction locale.
+        Les codes propres à un service (par exemple `WASTE_LOCATION_NOT_FOUND`) sont traités comme inconnus
+        et retombent sur `INTERNAL_ERROR`.
+      enum: [VALIDATION_ERROR, UNAUTHORIZED, RATE_LIMITED, UPSTREAM_UNAVAILABLE, INTERNAL_ERROR]
+
+    FieldIssueCode:
+      type: string
+      enum: [required, invalid_enum, out_of_range, too_long, in_future, invalid_format]
+
+    ErrorEnvelope:
+      type: object
+      description: |
+        Structure d'erreur attendue côté client (passerelle, Feature 5). Des champs optionnels supplémentaires
+        pourront apparaître plus tard sans casser la PWA, qui ignore ce qu'elle ne gère pas.
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              description: Un `ErrorCode` ou un code propre à un service.
+            message:
+              type: string
+              description: Texte lisible par l'humain, traduit selon `Accept-Language` (affichage de secours uniquement).
+            request_id:
+              type: string
+              description: ULID créé par la passerelle, identique à l'en-tête `X-Request-Id`.
+            details:
+              type: array
+              description: Détails optionnels par champ (erreurs de validation). Extension proposée à valider avec Features 5 et 18.
+              items:
+                type: object
+                required: [field, code]
+                properties:
+                  field:
+                    type: string
+                    example: amount_bucket
+                  code:
+                    $ref: "#/components/schemas/FieldIssueCode"
+      example:
+        error:
+          code: VALIDATION_ERROR
+          message: Un ou plusieurs champs sont invalides.
+          request_id: 01HV3K8Z9Q4M2X7B5N6P1D0RTE
+          details:
+            - field: amount_bucket
+              code: invalid_enum
+
+    QueuedReport:
+      type: object
+      description: |
+        Entrée conservée dans l'IndexedDB de l'appareil lorsqu'il n'y a pas de réseau. Elle n'est pas envoyée
+        telle quelle : seul `payload` constitue le corps de `POST /v1/api/locations/reports` (Feature 18).
+      required: [local_id, payload, queued_at, state, attempts]
+      properties:
+        local_id:
+          type: string
+          pattern: '^[0-9A-HJKMNP-TV-Z]{26}$'
+          description: ULID généré sur l'appareil. Définit l'ordre de rejeu et sert de `X-Idempotency-Key` (Feature 20).
+        payload:
+          type: object
+          description: Corps envoyé à `POST /v1/api/locations/reports`, avec `observed_at` conservé.
+          required: [latitude, longitude, amount_bucket, waste_type, observed_at]
+          properties:
+            latitude:
+              type: number
+              minimum: -90
+              maximum: 90
+            longitude:
+              type: number
+              minimum: -180
+              maximum: 180
+            accuracy_m:
+              type: number
+              minimum: 0
+            location_source:
+              $ref: "#/components/schemas/LocationSource"
+            amount_bucket:
+              $ref: "#/components/schemas/AmountBucket"
+            waste_type:
+              $ref: "#/components/schemas/WasteType"
+            description:
+              type: string
+              maxLength: 500
+            observed_at:
+              type: string
+              format: date-time
+        queued_at:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [pending, syncing, failed, synced]
+        attempts:
+          type: integer
+          minimum: 0
+        last_error:
+          type: [object, "null"]
+          description: Dernière erreur rencontrée lors d'une tentative de rejeu, si applicable.
+          properties:
+            status:
+              type: integer
+            error:
+              $ref: "#/components/schemas/ErrorEnvelope"
+              
