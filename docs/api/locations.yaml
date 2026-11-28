@@ -1,0 +1,571 @@
+openapi: 3.1.0
+info:
+  title: DWMS Location Reporting Service — Waste Report API
+  version: 0.2.0
+  summary: Submit, read and update waste-location reports (Objective 1, Feature 18).
+  description: |
+    Every waste report in DWMS enters the system through this API.
+
+    **Owner:** Feature 18 / IMP — fanyicharllson (branch `feat/obj1/fanyi_charllson/report-api`),
+    user-facing endpoints. The IoT/device endpoint is built by the second Feature 18 implementer.
+    **Objective:** 1 — Collect waste-location information.
+
+    ### Conventions
+    - Coordinates are WGS 84 (EPSG:4326) decimal degrees. In JSON bodies they are sent as
+      separate `latitude` / `longitude` fields so field apps can't swap the order by mistake;
+      the service stores them as a PostGIS `POINT`.
+    - Timestamps are ISO 8601 / RFC 3339 in UTC.
+    - Errors use **Problem Details** (RFC 9457), media type `application/problem+json`.
+
+    ### Authentication (ADR-0001, agreed with Feature 12 in #17)
+    - `Authorization: Bearer <access token>` on every `/reports` call.
+    - The service verifies each token itself (Zero-Trust): `RS256` only, `iss = dwms-auth-service`,
+      `aud = dwms-microservices`, `exp` / `iat` with 30 s clock tolerance. The public key comes from
+      the Auth service's JWKS endpoint (`AUTH_JWKS_URL`, cached 1 h, refreshed on an unknown `kid`)
+      or, in local development and tests, from `AUTH_PUBLIC_KEY` (PEM).
+    - Claims used: `sub` (user id), `role` (`citizen` | `field_agent` | `supervisor` | `admin`),
+      `tenant_id` (district).
+
+    ### District isolation
+    Users only see and change reports of their own district (`tenant_id`); a report from another
+    district answers `404`. `admin` sees every district.
+
+    ### Out of scope for this feature (owned by other modules)
+    - IoT / device report endpoint — second Feature 18 implementer.
+    - Photo upload — Feature 19 (`photo-svc`).
+    - `Idempotency-Key` handling for retried submissions — Feature 20.
+    - Full PostGIS schema, migrations and seed data — Feature 21.
+    - MQTT smart-bin telemetry — Feature 22.
+    - Marking reports stale after the TTL — Feature 23.
+    - Viewport GeoJSON for the map — Feature 24 (Map Service).
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://localhost:8001
+    description: Location Reporting Service, local development (LOCATIONS_SERVICE_URL)
+
+tags:
+  - name: reports
+    description: Waste-location reports
+  - name: health
+    description: Liveness for Compose / Kubernetes
+
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness and database check
+      operationId: getHealth
+      security: []
+      responses:
+        "200":
+          description: Service and database are up.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "503":
+          description: Service is up but the database is unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /reports:
+    post:
+      tags: [reports]
+      summary: Submit a waste report
+      description: |
+        Creates a report at the given position. The reporter is taken from the JWT, never from
+        the body. A report submitted after an offline period should send `observed_at` (when the
+        waste was seen); `created_at` is always the server's receive time.
+      operationId: createReport
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportCreate"
+            examples:
+              fieldAgent:
+                summary: Field agent, GPS fix
+                value:
+                  latitude: 4.0511
+                  longitude: 9.7679
+                  accuracy_m: 8
+                  location_source: gps
+                  amount_bucket: high
+                  waste_type: household
+                  description: Pile next to the market entrance, blocking the gutter
+              offlineCitizen:
+                summary: Citizen, pin dropped manually, synced later
+                value:
+                  latitude: 3.8667
+                  longitude: 11.5167
+                  location_source: manual_pin
+                  amount_bucket: overflow
+                  waste_type: mixed
+                  observed_at: "2026-11-17T07:45:00Z"
+      responses:
+        "201":
+          description: Report created.
+          headers:
+            Location:
+              description: URL of the new report.
+              schema:
+                type: string
+                example: /reports/7f3c2a6e-1b4d-4f7a-9e2a-5c8d1e0b9a11
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+    get:
+      tags: [reports]
+      summary: List and filter reports
+      description: |
+        Returns reports matching every given filter, newest first, one page at a time.
+        The bounding-box filter is backed by a GiST index on the location column.
+      operationId: listReports
+      parameters:
+        - name: bbox
+          in: query
+          description: |
+            Only reports inside this box: `lat_min,lon_min,lat_max,lon_max`
+            (same order as the field-report simulator's `--bbox`).
+          schema:
+            type: string
+            pattern: '^-?\d+(\.\d+)?,-?\d+(\.\d+)?,-?\d+(\.\d+)?,-?\d+(\.\d+)?$'
+          example: "4.02,9.68,4.08,9.78"
+        - name: amount_bucket
+          in: query
+          description: One or more buckets.
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/AmountBucket"
+          example: [high, overflow]
+        - name: waste_type
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/WasteType"
+        - name: status
+          in: query
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/ReportStatus"
+          example: [open]
+        - name: updated_since
+          in: query
+          description: Only reports created or changed after this instant (for incremental sync).
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: cursor
+          in: query
+          description: Opaque `next_cursor` from the previous page.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: One page of reports.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /reports/{report_id}:
+    parameters:
+      - $ref: "#/components/parameters/ReportId"
+
+    get:
+      tags: [reports]
+      summary: Get one report
+      operationId: getReport
+      responses:
+        "200":
+          description: The report.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [reports]
+      summary: Update a report's amount, type, description or status
+      description: |
+        Partial update. Only the fields sent are changed.
+
+        **Concurrent updates:** send the version you last read in `If-Match` (the `ETag` from
+        `GET`, e.g. `"3"`). If someone else changed the report in between, the update is refused
+        with `412` and nothing is overwritten — reload and retry. Requests without `If-Match`
+        are refused with `428`.
+
+        **Who may change what:** a `citizen` may only change the `description` of a report they
+        submitted; `field_agent`, `supervisor` and `admin` may change every field. Anything else
+        is `403`.
+      operationId: updateReport
+      parameters:
+        - name: If-Match
+          in: header
+          required: true
+          description: The report's current `ETag`.
+          schema:
+            type: string
+            example: '"3"'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportUpdate"
+            examples:
+              escalate:
+                summary: Waste pile grew
+                value:
+                  amount_bucket: overflow
+              collected:
+                summary: Site cleared after the SPF collection
+                value:
+                  status: collected
+                  amount_bucket: empty
+      responses:
+        "200":
+          description: Updated report.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "412":
+          description: The report changed since you read it (`If-Match` does not match).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "428":
+          description: "`If-Match` header is missing."
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: RS256 access token issued by the Auth service (Feature 12, ADR-0001).
+
+  parameters:
+    ReportId:
+      name: report_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  headers:
+    ETag:
+      description: Current version of the report, quoted. Send it back in `If-Match` to update.
+      schema:
+        type: string
+        example: '"3"'
+
+  responses:
+    Unauthorized:
+      description: |
+        Missing or invalid bearer token: bad signature, an algorithm other than `RS256`, wrong
+        issuer or audience, expired, or missing `sub` / `role` / `tenant_id`.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Authenticated, but not allowed to make this change.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: No report with this id in your district.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ValidationError:
+      description: The request is well-formed JSON but a field is missing or invalid.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: https://dwms.example/problems/validation-error
+            title: Validation error
+            status: 422
+            detail: One or more fields are invalid.
+            errors:
+              - field: latitude
+                message: must be between -90 and 90
+              - field: amount_bucket
+                message: "must be one of: empty, low, moderate, high, overflow"
+
+  schemas:
+    AmountBucket:
+      type: string
+      description: |
+        Estimated fill / volume, matching the palette spec (README → Dimension A):
+        `empty` 0–10 %, `low` 11–40 %, `moderate` 41–70 %, `high` 71–90 %, `overflow` > 90 %.
+        "Unknown / stale" is not a reportable value — the map derives it from report age.
+      enum: [empty, low, moderate, high, overflow]
+
+    WasteType:
+      type: string
+      enum: [household, plastic, organic, construction, electronic, hazardous, mixed, other]
+
+    LocationSource:
+      type: string
+      description: |
+        How the position was obtained. `manual_pin` is the fallback for weak GPS. `sensor` is only
+        set by the IoT/device endpoint; users send `gps` or `manual_pin`.
+      enum: [gps, manual_pin, sensor]
+
+    ReportStatus:
+      type: string
+      description: |
+        `open` — waste is there. `collection_requested` — an SPF request exists (Requests service).
+        `collected` — site cleared by the SPF. `invalid` — not waste / duplicate / spam, kept for
+        audit instead of deleted.
+      enum: [open, collection_requested, collected, invalid]
+
+    ReporterRole:
+      type: string
+      description: The ADR-0001 user roles, plus `sensor` for reports from IoT devices.
+      enum: [citizen, field_agent, supervisor, admin, sensor]
+
+    ReportCreate:
+      type: object
+      additionalProperties: false
+      required: [latitude, longitude, amount_bucket, waste_type]
+      properties:
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+        accuracy_m:
+          type: number
+          minimum: 0
+          maximum: 10000
+          description: GPS accuracy radius in metres, if the device reports one.
+        location_source:
+          type: string
+          enum: [gps, manual_pin]
+          default: gps
+        amount_bucket:
+          $ref: "#/components/schemas/AmountBucket"
+        waste_type:
+          $ref: "#/components/schemas/WasteType"
+        description:
+          type: string
+          maxLength: 500
+        observed_at:
+          type: string
+          format: date-time
+          description: When the waste was seen. Defaults to the receive time; may not be in the future.
+
+    ReportUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Location and reporter can't be changed — submit a new report instead.
+      properties:
+        amount_bucket:
+          $ref: "#/components/schemas/AmountBucket"
+        waste_type:
+          $ref: "#/components/schemas/WasteType"
+        description:
+          type: string
+          maxLength: 500
+        status:
+          $ref: "#/components/schemas/ReportStatus"
+
+    Report:
+      type: object
+      required:
+        - id
+        - latitude
+        - longitude
+        - location_source
+        - amount_bucket
+        - waste_type
+        - status
+        - reporter
+        - observed_at
+        - created_at
+        - updated_at
+        - version
+      properties:
+        id:
+          type: string
+          format: uuid
+        latitude:
+          type: number
+        longitude:
+          type: number
+        accuracy_m:
+          type: [number, "null"]
+        location_source:
+          $ref: "#/components/schemas/LocationSource"
+        amount_bucket:
+          $ref: "#/components/schemas/AmountBucket"
+        waste_type:
+          $ref: "#/components/schemas/WasteType"
+        description:
+          type: [string, "null"]
+        status:
+          $ref: "#/components/schemas/ReportStatus"
+        reporter:
+          type: object
+          required: [id, role]
+          properties:
+            id:
+              type: string
+              description: User id from the JWT `sub` claim.
+            role:
+              $ref: "#/components/schemas/ReporterRole"
+        observed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+          description: Increases by 1 on every update. Same value as the `ETag`.
+      example:
+        id: 7f3c2a6e-1b4d-4f7a-9e2a-5c8d1e0b9a11
+        latitude: 4.0511
+        longitude: 9.7679
+        accuracy_m: 8
+        location_source: gps
+        amount_bucket: high
+        waste_type: household
+        description: Pile next to the market entrance, blocking the gutter
+        status: open
+        reporter:
+          id: "42"
+          role: field_agent
+        observed_at: "2026-11-18T08:30:00Z"
+        created_at: "2026-11-18T08:30:02Z"
+        updated_at: "2026-11-18T08:30:02Z"
+        version: 1
+
+    ReportPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Report"
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
+    Health:
+      type: object
+      required: [status, service, database]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        service:
+          type: string
+          const: locations
+        database:
+          type: string
+          enum: [reachable, unreachable]
+
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          description: Field-level messages (validation errors only).
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string

@@ -137,3 +137,15 @@ cd distributed-waste-management
 cp .env.example .env            # never commit .env
 pre-commit install              # installs lint/format hooks
 docker compose up --build       # gateway + PostGIS + Redis + MQTT + services
+```
+
+---
+
+## Module Contributions
+
+Who is building what, so the work is visible in one place. When you claim a module, add one row:
+feature, role, owner, claim Discussion, pull request, current status.
+
+| Feature | Role | Owner | Claim | PR | Status |
+|---------|------|-------|-------|----|--------|
+| 18 — Waste report API (user endpoints) | IMP | @fanyicharllson | Discussion #51 | #13 | OpenAPI spec, user endpoints, ADR-0001 token checks, migration, Dockerfile, 55 tests — awaiting review |
