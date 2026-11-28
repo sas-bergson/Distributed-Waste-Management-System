@@ -1,12 +1,13 @@
 openapi: 3.1.0
 info:
   title: DWMS Location Reporting Service — Waste Report API
-  version: 0.1.0
+  version: 0.2.0
   summary: Submit, read and update waste-location reports (Objective 1, Feature 18).
   description: |
     Every waste report in DWMS enters the system through this API.
 
-    **Owner:** Feature 18 / IMP — fanyicharllson (branch `feat/obj1/fanyi_charllson/report-api`).
+    **Owner:** Feature 18 / IMP — fanyicharllson (branch `feat/obj1/fanyi_charllson/report-api`),
+    user-facing endpoints. The IoT/device endpoint is built by the second Feature 18 implementer.
     **Objective:** 1 — Collect waste-location information.
 
     ### Conventions
@@ -15,11 +16,22 @@ info:
       the service stores them as a PostGIS `POINT`.
     - Timestamps are ISO 8601 / RFC 3339 in UTC.
     - Errors use **Problem Details** (RFC 9457), media type `application/problem+json`.
-    - Clients reach this service through the API Gateway. Authentication is a JWT bearer
-      token issued by the gateway (Feature 12). Until Feature 12 is merged the service
-      accepts a development stub token.
+
+    ### Authentication (ADR-0001, agreed with Feature 12 in #17)
+    - `Authorization: Bearer <access token>` on every `/reports` call.
+    - The service verifies each token itself (Zero-Trust): `RS256` only, `iss = dwms-auth-service`,
+      `aud = dwms-microservices`, `exp` / `iat` with 30 s clock tolerance. The public key comes from
+      the Auth service's JWKS endpoint (`AUTH_JWKS_URL`, cached 1 h, refreshed on an unknown `kid`)
+      or, in local development and tests, from `AUTH_PUBLIC_KEY` (PEM).
+    - Claims used: `sub` (user id), `role` (`citizen` | `field_agent` | `supervisor` | `admin`),
+      `tenant_id` (district).
+
+    ### District isolation
+    Users only see and change reports of their own district (`tenant_id`); a report from another
+    district answers `404`. `admin` sees every district.
 
     ### Out of scope for this feature (owned by other modules)
+    - IoT / device report endpoint — second Feature 18 implementer.
     - Photo upload — Feature 19 (`photo-svc`).
     - `Idempotency-Key` handling for retried submissions — Feature 20.
     - Full PostGIS schema, migrations and seed data — Feature 21.
@@ -33,8 +45,6 @@ info:
 servers:
   - url: http://localhost:8001
     description: Location Reporting Service, local development (LOCATIONS_SERVICE_URL)
-  - url: http://localhost:8080/api/locations
-    description: Through the API Gateway, local development
 
 tags:
   - name: reports
@@ -227,9 +237,9 @@ paths:
         with `412` and nothing is overwritten — reload and retry. Requests without `If-Match`
         are refused with `428`.
 
-        **Who may change what** (enforced once RBAC, Feature 16, is merged):
-        the original reporter may change `description`; field agents and operators may change
-        every field.
+        **Who may change what:** a `citizen` may only change the `description` of a report they
+        submitted; `field_agent`, `supervisor` and `admin` may change every field. Anything else
+        is `403`.
       operationId: updateReport
       parameters:
         - name: If-Match
@@ -250,10 +260,10 @@ paths:
                 summary: Waste pile grew
                 value:
                   amount_bucket: overflow
-              resolved:
-                summary: Site cleared after collection
+              collected:
+                summary: Site cleared after the SPF collection
                 value:
-                  status: resolved
+                  status: collected
                   amount_bucket: empty
       responses:
         "200":
@@ -292,7 +302,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
-      description: Access token from the gateway's login flow (Feature 12).
+      description: RS256 access token issued by the Auth service (Feature 12, ADR-0001).
 
   parameters:
     ReportId:
@@ -312,7 +322,9 @@ components:
 
   responses:
     Unauthorized:
-      description: Missing or invalid bearer token.
+      description: |
+        Missing or invalid bearer token: bad signature, an algorithm other than `RS256`, wrong
+        issuer or audience, expired, or missing `sub` / `role` / `tenant_id`.
       content:
         application/problem+json:
           schema:
@@ -324,7 +336,7 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     NotFound:
-      description: No report with this id.
+      description: No report with this id in your district.
       content:
         application/problem+json:
           schema:
@@ -361,19 +373,23 @@ components:
 
     LocationSource:
       type: string
-      description: How the position was obtained. `manual_pin` is the fallback for weak GPS.
+      description: |
+        How the position was obtained. `manual_pin` is the fallback for weak GPS. `sensor` is only
+        set by the IoT/device endpoint; users send `gps` or `manual_pin`.
       enum: [gps, manual_pin, sensor]
 
     ReportStatus:
       type: string
       description: |
-        `open` — waste is there. `resolved` — site cleared (e.g. after an SPF collection).
-        `invalid` — not waste / duplicate / spam, kept for audit instead of deleted.
-      enum: [open, resolved, invalid]
+        `open` — waste is there. `collection_requested` — an SPF request exists (Requests service).
+        `collected` — site cleared by the SPF. `invalid` — not waste / duplicate / spam, kept for
+        audit instead of deleted.
+      enum: [open, collection_requested, collected, invalid]
 
     ReporterRole:
       type: string
-      enum: [citizen, field_agent, operator, sensor]
+      description: The ADR-0001 user roles, plus `sensor` for reports from IoT devices.
+      enum: [citizen, field_agent, supervisor, admin, sensor]
 
     ReportCreate:
       type: object
@@ -394,8 +410,8 @@ components:
           maximum: 10000
           description: GPS accuracy radius in metres, if the device reports one.
         location_source:
-          allOf:
-            - $ref: "#/components/schemas/LocationSource"
+          type: string
+          enum: [gps, manual_pin]
           default: gps
         amount_bucket:
           $ref: "#/components/schemas/AmountBucket"
